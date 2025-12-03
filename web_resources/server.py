@@ -52,8 +52,8 @@ async def handler(websocket):
 
 async def main():
     # 0.0.0.0 で待受（どこからでも接続OK）
-    async with websockets.serve(handler, "0.0.0.0", 8765):
-        print("サーバ待機中: ws://0.0.0.0:8765")
+    async with websockets.serve(handler, "127.0.0.1", 8765):
+        print("サーバ待機中: ws://127.0.0.1:8765")
         await asyncio.Future()
 
 if __name__ == "__main__":
