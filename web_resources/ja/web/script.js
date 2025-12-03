@@ -19,9 +19,33 @@ const lang_tweet_result = '結果をツイート！';
 const lang_ai_loading = 'AI読み込み中…';
 const lang_ai_loaded = 'AI読み込み完了！';
 const lang_ai_load_failed = 'AI読み込み失敗 リロードしてください';
+const socket = new WebSocket('ws://127.0.0.1:8765');
+socket.onopen = () => {
+    console.log("WebSocket接続完了");
+};
 
 
 
+// ■ プレイヤーの情報を送る関数
+function sendHumanMove(y, x) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        // 座標変換ロジック (例: x=0,y=0 -> "a1")
+        const coord_str = String.fromCharCode(97 + x) + (y + 1);
+
+        // プレイヤーの手番情報を送信
+        const data = JSON.stringify({
+            "who": "player",       // 誰の手番か
+            "turn": record.length, // 手数
+            "y": y,                // 行
+            "x": x,                // 列
+            "coord": coord_str     // "f5" などの文字列
+        });
+        socket.send(data);
+        console.log("Player送信:", data);
+    }
+}
+
+let last_eval_score = 0;
 let hw = 8;
 let hw2 = 64;
 let dy = [0, 1, 0, -1, 1, 1, -1, -1];
@@ -168,7 +192,7 @@ function start() {
     for (var i = 0; i < 2; ++i) {
         players.item(i).disabled = true;
         if (players.item(i).checked) {
-            ai_player = players.item(i).value;
+            ai_player = parseInt(players.item(i).value, 10);
         }
     }
     console.log("ai player", ai_player);
@@ -365,15 +389,56 @@ async function ai() {
     var pointer = _malloc(hw2 * 4);
     var offset = pointer / 4;
     HEAP32.set(res, offset);
+
+    // 1. AIによる評価値の計算（＝プレイヤーが打った直後の盤面状況）
     var val = _ai_js(pointer, level_idx, ai_player);
     _free(pointer);
     console.log('val', val);
     var y = Math.floor(val / 1000 / hw);
     var x = Math.floor((val - y * 1000 * hw) / 1000);
+    
+    // 現在の評価値 (AIから見た有利度)
     var dif_stones = val - y * 1000 * hw - x * 1000 - 100;
+
+    // 座標変換ロジック (例: x=0,y=0 -> "a1")
+    var coord_str = String.fromCharCode(97 + x) + (y + 1);
+
+    // 2. 全情報をWebSocketサーバへ送信
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        // --- 1通目：プレイヤーの手の評価（変動値）を送る ---
+        var delta = dif_stones - last_eval_score;
+        last_eval_score = dif_stones;
+
+        const payload_eval = JSON.stringify({
+            "who": "player_eval",       // 「プレイヤーの評価」として送る
+            "turn": record.length,      // 直前のプレイヤーの手番数
+            "eval": {
+                "score": dif_stones,    // 現在の状況
+                "delta": delta          // プレイヤーの手による変動
+            },
+            "grid": grid                // プレイヤーが打った直後の盤面
+        });
+        socket.send(payload_eval);
+        console.log("Player評価送信:", payload_eval);
+    }
+
+    // 3. 実際に石を置く処理（画面反映）など
     console.log('y', y, 'x', x, 'dif_stones', dif_stones);
     move(y, x);
     update_graph(dif_stones);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        // --- 2通目：AIの着手情報を送る ---
+        const payload_ai = JSON.stringify({
+            "who": "ai",                // AIの手番
+            "turn": record.length,      // 最新の手番数
+            "y": y,
+            "x": x,
+            "coord": coord_str
+        });
+        socket.send(payload_ai);
+        console.log("AI着手送信:", payload_ai);
+    }
 }
 
 function calc_value() {
@@ -469,6 +534,12 @@ function move(y, x) {
     ++record.length;
     record[record.length - 1] = [y, x];
     update_record();
+
+    // 人間の手番なら送信
+    if (player !== ai_player) {
+        sendHumanMove(y, x);
+    }
+
     ++n_stones;
     player = 1 - player;
     show(y, x);
